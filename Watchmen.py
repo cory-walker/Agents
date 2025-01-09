@@ -10,6 +10,7 @@ import dspy
 from typing import Literal
 import spacy
 import re
+import math
 
 
 class Keyring:
@@ -214,15 +215,62 @@ class Scholar:
             response = classify(text=self.text)
             return response.sentiment
 
+        def token_count(self):
+            doc = self.nlp.make_doc(self.text)
+            return len(doc)
+
         def fetch_overall_classification(self):
-            '''DSPY: runs the procedures for summary, sentiment, primary and secondary emotions'''
-            summary, reasoning = self.create_summary()
-            sentiment = self.analyze_sentiment()
-            primary_emotion = self.analyze_emotion()
-            secondary_emotion = self.analyze_secondary_emotion()
-            metadata = {'summary': summary, 'summary_reasoning': reasoning, 'sentiment': sentiment,
-                        'primary_emotion': primary_emotion, 'secondary_emotion': secondary_emotion}
-            return metadata
+            '''DSPY: runs the procedures for summary, sentiment, primary and secondary emotions.
+            If the text is larger than 120000 tokens, it will evenly divid it and run classification on all parts, returning a comma separated list for each one.
+            '''
+
+            token_ct = self.token_count()
+
+            if token_ct < 120000:
+                print('classifying: ' + self.video_id)
+                summary, reasoning = self.create_summary()
+                sentiment = self.analyze_sentiment()
+                primary_emotion = self.analyze_emotion()
+                secondary_emotion = self.analyze_secondary_emotion()
+                metadata = {'summary': summary, 'summary_reasoning': reasoning, 'sentiment': sentiment,
+                            'primary_emotion': primary_emotion, 'secondary_emotion': secondary_emotion}
+                return metadata
+            else:
+                summaries = []
+                reasonings = []
+                sentiments = []
+                primary_emotions = []
+                secondary_emotions = []
+
+                text_orig = self.text
+                token_ct = self.token_count()
+                iterations = math.ceil(token_ct / 120000)
+                doc = self.nlp(text_orig)
+                step = token_ct / iterations
+
+                print('classifying: ' + self.video_id +
+                      " in " + str(iterations) + 'parts.')
+
+                for i in range(iterations):
+                    token_start = i * step
+                    token_stop = token_start + step
+                    str_list = [i.text for i in doc[token_start:token_stop]]
+
+                    self.text = ' '.join(str_list)
+                    summary, reasoning = self.create_summary()
+                    sentiment = self.analyze_sentiment()
+                    primary_emotion = self.analyze_emotion()
+                    secondary_emotion = self.analyze_secondary_emotion()
+                    summaries.append(summary)
+                    reasonings.append(reasoning)
+                    sentiments.append(sentiment)
+                    primary_emotions.append(primary_emotion)
+                    secondary_emotions.append(secondary_emotion)
+
+                self.text = text_orig
+                metadata = {'summary': ','.join(summaries), 'summary_reasoning': ','.join(reasonings), 'primary_emotion': ','.join(primary_emotions), 'seconary_emotion': ','.join(secondary_emotions)
+                            }
+                return metadata
 
         def lookup_video_info(self, video_id):
             '''returns the channel_id, channel_title, and channel category for a video_id'''
@@ -416,7 +464,7 @@ class Librarian:
         def channels_list(self, category=''):
             dfc = pd.read_csv(self.channels_index_path())
             if category > '':
-                dfc = dfc[dfc['category'] == category]
+                dfc = dfc[dfc['category'].str.lower() == category.lower()]
 
             return dfc['channel_id'].to_list()
 
@@ -786,6 +834,20 @@ class Watchmen:
         print('Refreshing the library...')
         # Take stock of anything that's changed
         self.librarian.refresh_index()
+
+    def classify_transcripts(self, category=''):
+        chan_list = self.librarian.channels_list(category=category)
+        for chan in chan_list:
+            df = pd.read_parquet(
+                self.librarian.channels_folder() + chan + '_search.parquet')
+            video_ids = df['video_id'].to_list()
+            for video_id in video_ids:
+                classification_file = self.librarian.classifications_folder() + video_id + \
+                    '_classification.parquet'
+                if not os.path.exists(classification_file):
+                    self.scholar.text_from_transcript_parquet(
+                        self.librarian.transcripts_folder() + video_id + "_transcript.parquet")
+                    self.scholar.create_overall_classification()
 
     def entity_file_path(self, video_id):
         return './data/entities/' + video_id + '_entities.parquet'
