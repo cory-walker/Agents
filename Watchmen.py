@@ -438,7 +438,11 @@ class Librarian:
                                    'transcript': 2, 'youtube channel search': 3}
             self.source_systems = {'user': 1, 'youtube': 2, 'scholar': 3}
 
+            self.classification_columns = [
+                'summary', 'summary_reasoning', 'sentiment', 'primary_emotion', 'secondary_emotion']
+
     class Librarian:
+
         def __init__(self, library_path='./', keyring=Keyring(), refresh_index=True):
             self.keyring = Keyring()
 
@@ -470,7 +474,7 @@ class Librarian:
 
         def create_document_store(self):
             df = pd.DataFrame(columns=[
-                'lib_key', 'source_id', 'rec_mod_dtm', 'doc_type_id',  'source_system_id', 'path'])
+                'lib_key', 'source_id', 'rec_mod_dtm', 'doc_type_id',  'source_system_id', 'path', 'summary', 'summary_reasoning', 'sentiment', 'primary_emotion', 'secondary_emotion'])
             table = pa.Table.from_pandas(df)
             pq.write_table(table, self.library_path + 'library_index.parquet',
                            use_dictionary=True, compression='gzip')
@@ -499,14 +503,15 @@ class Librarian:
 
         def dimensions_folder(self):
             return self.library_path + 'data/dimensons/'
+#! THERE IS AN ERROR WHEN LOADING DUE TO SENTIMENT NOT FOUND
 
-        def upsert_library_index(self, source_id, rec_mod_dtm, doc_type_id, source_system_id, path):
+        def upsert_library_index(self, source_id, rec_mod_dtm, doc_type_id, source_system_id, path, summary='', summary_reasoning='', sentiment='', primary_emotion='', secondary_emotion=''):
 
             rows, columns = self.libraryIndex.shape
 
             new_lib_key = rows + 1
-            dfn = pd.DataFrame([{'lib_key': new_lib_key, 'source_id': source_id, 'rec_mod_dtm': rec_mod_dtm,
-                                'doc_type_id': doc_type_id, 'source_system_id': source_system_id, 'path': path}])
+            dfn = pd.DataFrame([{'lib_key': new_lib_key, 'source_id': source_id, 'rec_mod_dtm': rec_mod_dtm, 'doc_type_id': doc_type_id, 'source_system_id': source_system_id, 'path': path,
+                               'summary': summary, 'summary_reasoning': summary_reasoning, 'sentiment': sentiment, 'primary_emotion': primary_emotion, 'secondary_emotion': secondary_emotion}])
 
             # Does the entry for the file already exist? If not, then insert it
             if not path in self.libraryIndex['path'].to_list():
@@ -514,7 +519,7 @@ class Librarian:
                 return True
             else:
                 cur_rec_mod_dtm = self.libraryIndex[self.libraryIndex['path']
-                                                    == path]['rec_mod_dtm'][0]
+                                                    == path]['rec_mod_dtm'].iloc[0]
                 # If it does have an entry, is the file modification date different?
                 if rec_mod_dtm != cur_rec_mod_dtm:
                     new_lib_key = self.libraryIndex[self.libraryIndex['path']
@@ -524,12 +529,30 @@ class Librarian:
                     self.libraryIndex = pd.concat([self.libraryIndex, dfn])
                     return True
 
+                cur_sentiment = self.libraryIndex[self.libraryIndex['path']
+                                                  == path]['sentiment'].iloc[0]
+                if sentiment != '' and cur_sentiment == '':
+                    return True
+
             return False
 
         def rewrite_library_index(self):
             table = pa.Table.from_pandas(self.libraryIndex)
             pq.write_table(table, self.library_index_path(),
                            use_dictionary=True, compression='gzip')
+
+        def fetch_classification(self, source_id):
+            file_path = self.classifications_folder() + source_id + \
+                '_classification.parquet'
+            if os.path.exists(file_path):
+
+                df = pd.read_parquet(file_path)
+                return df
+            else:
+                df = pd.DataFrame()
+                for c in self.classifier.classification_columns:
+                    df[c] = ''
+                return df
 
         def check_folder_for_new_files(self, doc_type, source_system, folder, source_id_replacement):
             any_changes = False
@@ -542,8 +565,30 @@ class Librarian:
                 rec_mod_dtm = datetime.fromtimestamp(
                     os.path.getctime(path)).strftime('%Y-%m-%d %H:%M:%S')
 
-                new_items = self.upsert_library_index(
-                    source_id, rec_mod_dtm, doc_type_id, source_system_id, path)
+                clf = self.fetch_classification(
+                    source_id=source_id)
+
+                if clf.size == 0:
+
+                    summary = ''
+                    summary_reasoning = ''
+                    sentiment = ''
+                    primary_emotion = ''
+                    secondary_emotion = ''
+
+                else:
+
+                    summary = clf['summary'].iloc[0]
+                    summary_reasoning = clf['summary_reasoning'].iloc[0]
+                    sentiment = clf['sentiment'].iloc[0]
+                    primary_emotion = clf['primary_emotion'].iloc[0]
+                    secondary_emotion = clf['secondary_emotion'].iloc[0]
+
+                try:
+                    new_items = self.upsert_library_index(
+                        source_id, rec_mod_dtm, doc_type_id, source_system_id, path, summary, summary_reasoning, sentiment, primary_emotion, secondary_emotion)
+                except:
+                    print(f'Error updating with record {source_id}')
 
                 if new_items:
                     any_changes = True
