@@ -458,6 +458,9 @@ class Librarian:
             if not os.path.exists(self.library_index_path()):
                 self.create_document_store()
 
+            self.channelIndex = pd.read_csv(
+                self.channels_index_path(), encoding='utf8')
+
             self.classifier = Librarian.Classifer(self.dimensions_folder())
             self.libraryIndex = pd.read_parquet(self.library_index_path())
             self.libraryIndex.set_index('lib_key')
@@ -558,6 +561,23 @@ class Librarian:
 
             return df
 
+        def fetch_channel_info(self, video_id_list):
+            df = pd.DataFrame({'video_id': video_id_list})
+            df['channel_id'] = df['video_id'].apply(
+                lambda x: self.fetch_channel(x))
+            dfchan = pd.read_csv(self.channels_index_path(), encoding='utf8')
+            df = df.join(dfchan.set_index('channel_id'), on='channel_id')
+            return df
+
+        def fetch_channel(self, video_id):
+            for file in os.listdir(self.channels_folder()):
+                dfsearch = pd.read_parquet(self.channels_folder() + file)
+                channel_id = file.replace('_search.parquet', '')
+                if video_id in dfsearch['video_id'].to_list():
+                    return channel_id
+
+            return ''
+
         def check_folder_for_new_files(self, doc_type, source_system, folder, source_id_replacement):
             any_changes = False
             doc_type_id = self.classifier.document_types[doc_type]
@@ -621,6 +641,42 @@ class Librarian:
                     video_ids.append(video_id)
 
             return video_ids
+
+        def compile_entity_index(self):
+            dfe = pd.DataFrame()
+
+            for file in os.listdir(self.entities_folder()):
+                source_id = file.replace('_entities.parquet', '')
+                df = pd.read_parquet(self.entities_folder() + file)
+                df['source_id'] = source_id
+                dfe = pd.concat([dfe, df])
+
+            table = pa.Table.from_pandas(dfe)
+            pq.write_table(table, self.library_path + 'data/entity_index.parquet',
+                           use_dictionary=True, compression='gzip')
+
+        def collect_data_containing_entity(self, entity):
+            '''Searches all documents containing the given entity and returns classification and index data'''
+            entity = entity.lower()
+            dfe = pd.read_parquet('./data/entity_index.parquet')
+            dfe['value'] = dfe['value'].str.lower()
+            dfl = pd.read_parquet('./data/library_index.parquet')
+
+            source_ids = dfe[dfe['value'].str.contains(
+                entity)]['source_id'].unique()
+            dfs = dfl[dfl['source_id'].isin(source_ids)]
+            dfc = self.fetch_channel_info(dfs['source_id'].unique())
+            dfs = dfs.join(dfc.set_index('video_id'), on='source_id')
+            dfs['entity'] = entity
+            return dfs
+
+        def collect_multi_entity_data(self, entities_list=[]):
+            '''Given a list of entities to search for, this procedure returns a dataframe containing all matches with classification and index data'''
+            df = pd.DataFrame()
+            for entity in entities_list:
+                dfe = self.collect_data_containing_entity(entity)
+                df = pd.concat([dfe, df])
+            return df
 
 
 class YouTubeExplorer:
@@ -843,11 +899,11 @@ class YouTubeExplorer:
 
 
 class Watchmen:
-    def __init__(self, youtube_api_key_path='', openai_api_key_path='', spacy_model='en_core_web_sm'):
+    def __init__(self, youtube_api_key_path='', openai_api_key_path='', spacy_model='en_core_web_sm', refresh_indexes=True):
         self.master_keyring = Keyring()
 
         print('setting up librarian...')
-        self.librarian = Librarian.Librarian()
+        self.librarian = Librarian.Librarian(refresh_index=refresh_indexes)
 
         print('setting up youtube explorer...')
         # setup keys
@@ -870,10 +926,6 @@ class Watchmen:
 
         else:
             self.scholar = Scholar.Scholar()
-
-        print('Refreshing the library...')
-        # Take stock of anything that's changed
-        self.librarian.refresh_index()
 
     def classify_transcripts(self, category=''):
         chan_list = self.librarian.channels_list(category=category)
