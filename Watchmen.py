@@ -503,12 +503,10 @@ class Librarian:
 
         def dimensions_folder(self):
             return self.library_path + 'data/dimensons/'
-#! THERE IS AN ERROR WHEN LOADING DUE TO SENTIMENT NOT FOUND
 
         def upsert_library_index(self, source_id, rec_mod_dtm, doc_type_id, source_system_id, path, summary='', summary_reasoning='', sentiment='', primary_emotion='', secondary_emotion=''):
 
             rows, columns = self.libraryIndex.shape
-
             new_lib_key = rows + 1
             dfn = pd.DataFrame([{'lib_key': new_lib_key, 'source_id': source_id, 'rec_mod_dtm': rec_mod_dtm, 'doc_type_id': doc_type_id, 'source_system_id': source_system_id, 'path': path,
                                'summary': summary, 'summary_reasoning': summary_reasoning, 'sentiment': sentiment, 'primary_emotion': primary_emotion, 'secondary_emotion': secondary_emotion}])
@@ -517,22 +515,18 @@ class Librarian:
             if not path in self.libraryIndex['path'].to_list():
                 self.libraryIndex = pd.concat([self.libraryIndex, dfn])
                 return True
-            else:
-                cur_rec_mod_dtm = self.libraryIndex[self.libraryIndex['path']
-                                                    == path]['rec_mod_dtm'].iloc[0]
-                # If it does have an entry, is the file modification date different?
-                if rec_mod_dtm != cur_rec_mod_dtm:
-                    new_lib_key = self.libraryIndex[self.libraryIndex['path']
-                                                    == path]['lib_key']
 
-                    self.libraryIndex = self.libraryIndex[~self.library_path['path'] == path]
-                    self.libraryIndex = pd.concat([self.libraryIndex, dfn])
-                    return True
+            # The file exists. Check record modification date and sentiment for changes
+            cur_rec = self.libraryIndex[self.libraryIndex['path']
+                                        == path].iloc[0]
 
-                cur_sentiment = self.libraryIndex[self.libraryIndex['path']
-                                                  == path]['sentiment'].iloc[0]
-                if sentiment != '' and cur_sentiment == '':
-                    return True
+            if (cur_rec['rec_mod_dtm'] != rec_mod_dtm) or (cur_rec['sentiment'] != sentiment) or (cur_rec['primary_emotion'] != primary_emotion):
+                # There is a difference, so replace the record
+                lib_key = cur_rec['lib_key']
+                dfn['lib_key'] = lib_key
+                self.libraryIndex = self.libraryIndex[self.libraryIndex['path'] != path]
+                self.libraryIndex = pd.concat([self.libraryIndex, dfn])
+                return True
 
             return False
 
@@ -544,15 +538,25 @@ class Librarian:
         def fetch_classification(self, source_id):
             file_path = self.classifications_folder() + source_id + \
                 '_classification.parquet'
-            if os.path.exists(file_path):
 
+            df = pd.DataFrame()
+            if os.path.exists(file_path):
                 df = pd.read_parquet(file_path)
-                return df
+
             else:
-                df = pd.DataFrame()
-                for c in self.classifier.classification_columns:
-                    df[c] = ''
-                return df
+                df = pd.DataFrame([{'summary': str(None), 'summary_reasoning': str(None),
+                                  'sentiment': bool(None), 'primary_emotion': str(None), 'secondary_emotion': str(None)}])
+
+            for c in self.classifier.classification_columns:
+                if not c in df.columns:
+                    if c == 'sentiment':
+                        df[c] = bool(None)
+                    else:
+                        df[c] = str(None)
+
+            df['sentiment'] = df['sentiment'].astype(bool)
+
+            return df
 
         def check_folder_for_new_files(self, doc_type, source_system, folder, source_id_replacement):
             any_changes = False
@@ -562,33 +566,24 @@ class Librarian:
             for file in os.listdir(folder):
                 path = folder + file
                 source_id = file.replace(source_id_replacement, '')
+
                 rec_mod_dtm = datetime.fromtimestamp(
                     os.path.getctime(path)).strftime('%Y-%m-%d %H:%M:%S')
 
                 clf = self.fetch_classification(
                     source_id=source_id)
 
-                if clf.size == 0:
+                summary = clf['summary'].iloc[0]
+                summary_reasoning = clf['summary_reasoning'].iloc[0]
+                sentiment = clf['sentiment'].iloc[0]
+                primary_emotion = clf['primary_emotion'].iloc[0]
+                secondary_emotion = clf['secondary_emotion'].iloc[0]
 
-                    summary = ''
-                    summary_reasoning = ''
-                    sentiment = ''
-                    primary_emotion = ''
-                    secondary_emotion = ''
-
-                else:
-
-                    summary = clf['summary'].iloc[0]
-                    summary_reasoning = clf['summary_reasoning'].iloc[0]
-                    sentiment = clf['sentiment'].iloc[0]
-                    primary_emotion = clf['primary_emotion'].iloc[0]
-                    secondary_emotion = clf['secondary_emotion'].iloc[0]
-
-                try:
-                    new_items = self.upsert_library_index(
-                        source_id, rec_mod_dtm, doc_type_id, source_system_id, path, summary, summary_reasoning, sentiment, primary_emotion, secondary_emotion)
-                except:
-                    print(f'Error updating with record {source_id}')
+                # try:
+                new_items = self.upsert_library_index(source_id, rec_mod_dtm, doc_type_id, source_system_id,
+                                                      path, summary, summary_reasoning, sentiment, primary_emotion, secondary_emotion)
+                # except:
+                #    print(f'Error updating with record {source_id}')
 
                 if new_items:
                     any_changes = True
