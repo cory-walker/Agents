@@ -361,7 +361,7 @@ class Scholar:
 
         def create_topic_list(self):
             '''Returns the topics of the text in a list'''
-            return dspy.ChainOfThought(Scholar.Interaction.TopicList)(text=self.text).split(',')
+            return dspy.ChainOfThought(Scholar.Interaction.TopicList)(text=self.text).topics.split(',')
 
         def create_article_outline(self, topic):
             '''returns an article outline as a list for a given topic while using the text as the main information source'''
@@ -678,6 +678,9 @@ class Librarian:
                 df = pd.concat([dfe, df])
             return df
 
+        def topics_folder(self):
+            return self.library_path + 'data/topics/'
+
 
 class YouTubeExplorer:
 
@@ -926,6 +929,23 @@ class Watchmen:
 
         else:
             self.scholar = Scholar.Scholar()
+
+    def identify_topics_for_all(self):
+        '''Generates topic files for all transcripts that don't have one'''
+        for file in os.listdir(self.librarian.transcripts_folder()):
+            source_id = file.replace('_transcript.parquet', '')
+            topics_file_path = self.librarian.topics_folder() + source_id + \
+                '_topics.parquet'
+
+            if not os.path.exists(topics_file_path):
+                self.scholar.text_from_transcript_parquet(
+                    self.librarian.transcripts_folder() + file)
+                topics_list = self.scholar.create_topic_list()
+                df = pd.DataFrame(
+                    {'topic': topics_list, 'source_id': source_id})
+                table = pa.Table.from_pandas(df)
+                pq.write_table(table, topics_file_path,
+                               use_dictionary=True, compression='gzip')
 
     def classify_transcripts(self, category=''):
         chan_list = self.librarian.channels_list(category=category)
