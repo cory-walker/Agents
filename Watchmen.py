@@ -361,6 +361,7 @@ class Scholar:
 
         def create_topic_list(self):
             '''Returns the topics of the text in a list'''
+            #! MUST ADD IN BATCH PROCESS FOR TEXT BEYOND 120000 TOKENS
             return dspy.ChainOfThought(Scholar.Interaction.TopicList)(text=self.text).topics.split(',')
 
         def create_article_outline(self, topic):
