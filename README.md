@@ -26,3 +26,7 @@ Class: Librarian
 
 - Keeps track of the different files and metadata, builds and maintains an index for easier lookup.
 - Can retrieve metadata about transcripts or other items from the document stores.
+
+Code Corner files
+
+- Some pieces of the project may be shared out via social media. When that takes place, a copy of the article Jupyter notebook will be added here.
