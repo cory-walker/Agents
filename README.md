@@ -33,6 +33,23 @@ This is a collection of classes and procedures meant to help search for relevant
 
 - Some pieces of the project may be shared out via social media. When that takes place, a copy of the article Jupyter notebook will be added here.
 
+## Scripts
+
+### SearchForNewVideos.py
+
+- Arguments: Location of your YouTube API key file
+- What it does:
+  - Performs a new search for each YouTube channel in the youtube_channels_index.csv
+  - Attempts to download the closed captions transcript for any video it doesn't have one for.
+
+### ClassifyTranscipts.py
+
+- Arguments: Location of your OpenAI API key file
+- What it does:
+  - Builds a Named Entity file using Spacy for any transcripts that don't have one.
+  - Builds a Topic list file using ChatGPT for any transcripts that don't have one.
+  - "Classifies" any transcripts that doesn't already have the file for ChatGPT. This includes: Summarization, Primary Emotion, Secondary Emotion, and Sentiment.
+
 ## Notes
 
 - To keep costs lower through testing, I have limited my list of channels to Canadian news sites. You can add any you like to your copy.

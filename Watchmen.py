@@ -1007,7 +1007,6 @@ class Watchmen:
                 classification_file = self.librarian.classifications_folder() + video_id + \
                     '_classification.parquet'
                 if not os.path.exists(classification_file):
-                    print(f'Classifying {video_id}')
                     new_file_ct += 1
                     self.scholar.text_from_transcript_parquet(
                         self.librarian.transcripts_folder() + video_id + "_transcript.parquet")
