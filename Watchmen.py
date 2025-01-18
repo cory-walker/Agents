@@ -55,6 +55,11 @@ class Scholar:
             text = dspy.InputField()
             topics = dspy.OutputField(desc='A comma separated list of topics')
 
+        class MainTopic(dspy.Signature):
+            '''Provide the main topic the text is about in only a few words.'''
+            text = dspy.InputField()
+            topic = dspy.OutputField()
+
         class ArticleOutline(dspy.Signature):
             '''Write an article outline about a given topic. Please use the provided text as the primary information source.'''
             topic = dspy.InputField()
@@ -200,6 +205,38 @@ class Scholar:
             response = summarize(document=self.text)
             return response.summary, response.reasoning
 
+        def analyze_main_topic(self):
+            '''DSPY: Returns the main topic the text is about'''
+
+            token_count = self.token_count()
+
+            if token_count > 120000:
+                print(f'splitting text due to {token_count} tokens')
+                text_orig = self.text
+                iterations = math.ceil(token_count / 120000)
+                doc = self.nlp(text_orig)
+                step = token_count / iterations
+                topics = []
+
+                for i in range(iterations):
+                    token_start = i * step
+                    token_stop = token_start + step
+                    str_list = [i.text for i in doc[token_start:token_stop]]
+
+                    self.text = ' '.join(str_list)
+                    classify = dspy.Predict(Scholar.Interaction.MainTopic)
+                    response = classify(text=self.text)
+                    topics.append(response.topic)
+
+                self.text = text_orig
+                topicsU = list(set(topics))
+                return ' and '.join(topicsU)
+
+            else:
+                classify = dspy.Predict(Scholar.Interaction.MainTopic)
+                response = classify(text=self.text)
+                return response.topic
+
         def analyze_sentiment(self):
             '''DSPY: Returns True for positive and False for negative sentiment of the text'''
             classify = dspy.Predict('sentence -> sentiment: bool')
@@ -235,8 +272,9 @@ class Scholar:
                 sentiment = self.analyze_sentiment()
                 primary_emotion = self.analyze_emotion()
                 secondary_emotion = self.analyze_secondary_emotion()
+                main_topic = self.analyze_main_topic()
                 metadata = {'summary': summary, 'summary_reasoning': reasoning, 'sentiment': sentiment,
-                            'primary_emotion': primary_emotion, 'secondary_emotion': secondary_emotion}
+                            'primary_emotion': primary_emotion, 'secondary_emotion': secondary_emotion, 'main_topic': main_topic}
                 return metadata
             else:
                 summaries = []
@@ -244,6 +282,7 @@ class Scholar:
                 sentiments = []
                 primary_emotions = []
                 secondary_emotions = []
+                main_topics = []
 
                 text_orig = self.text
                 token_ct = self.token_count()
@@ -264,14 +303,17 @@ class Scholar:
                     sentiment = self.analyze_sentiment()
                     primary_emotion = self.analyze_emotion()
                     secondary_emotion = self.analyze_secondary_emotion()
+                    main_topic = self.analyze_main_topic()
+
                     summaries.append(summary)
                     reasonings.append(reasoning)
                     sentiments.append(sentiment)
                     primary_emotions.append(primary_emotion)
                     secondary_emotions.append(secondary_emotion)
+                    main_topics.append(main_topic)
 
                 self.text = text_orig
-                metadata = {'summary': ','.join(summaries), 'summary_reasoning': ','.join(reasonings), 'primary_emotion': ','.join(primary_emotions), 'seconary_emotion': ','.join(secondary_emotions)
+                metadata = {'summary': ','.join(summaries), 'summary_reasoning': ','.join(reasonings), 'primary_emotion': ','.join(primary_emotions), 'seconary_emotion': ','.join(secondary_emotions), 'main_topic': ','.join(main_topic)
                             }
                 return metadata
 
@@ -313,18 +355,27 @@ class Scholar:
             metadata = {}
             video_info = {}
 
+            columns = ['summary', 'summary_reasoning', 'sentiment',
+                       'primary_emotion', 'secondary_emotion', 'main_topic']
+
             if self.video_id != '':
                 video_info = self.lookup_video_info(self.video_id)
 
                 if os.path.exists(file_path):
-                    df = pd.read_parquet(file_path)
+                    dforig = pd.read_parquet(file_path)
+
+                    df = pd.DataFrame(columns=columns)
+                    df = pd.concat([df, dforig])
+
                     summary = df['summary'][0]
                     reasoning = df['summary_reasoning'][0]
                     sentiment = df['sentiment'][0]
                     primary_emotion = df['primary_emotion'][0]
                     secondary_emotion = df['secondary_emotion'][0]
+                    main_topic = df['main_topic'][0]
+
                     metadata = {'summary': summary, 'summary_reasoning': reasoning, 'sentiment': sentiment,
-                                'primary_emotion': primary_emotion, 'secondary_emotion': secondary_emotion}
+                                'primary_emotion': primary_emotion, 'secondary_emotion': secondary_emotion, 'main_topic': main_topic}
                 else:
                     metadata = self.fetch_overall_classification()
                     df = pd.DataFrame([metadata])
@@ -535,12 +586,12 @@ class Librarian:
         def dimensions_folder(self):
             return self.library_path + 'data/dimensons/'
 
-        def upsert_library_index(self, source_id, rec_mod_dtm, doc_type_id, source_system_id, path, summary='', summary_reasoning='', sentiment='', primary_emotion='', secondary_emotion=''):
+        def upsert_library_index(self, source_id, rec_mod_dtm, doc_type_id, source_system_id, path, summary='', summary_reasoning='', sentiment='', primary_emotion='', secondary_emotion='', main_topic=''):
 
             rows, columns = self.libraryIndex.shape
             new_lib_key = rows + 1
             dfn = pd.DataFrame([{'lib_key': new_lib_key, 'source_id': source_id, 'rec_mod_dtm': rec_mod_dtm, 'doc_type_id': doc_type_id, 'source_system_id': source_system_id, 'path': path,
-                               'summary': summary, 'summary_reasoning': summary_reasoning, 'sentiment': sentiment, 'primary_emotion': primary_emotion, 'secondary_emotion': secondary_emotion}])
+                               'summary': summary, 'summary_reasoning': summary_reasoning, 'sentiment': sentiment, 'primary_emotion': primary_emotion, 'secondary_emotion': secondary_emotion, 'main_topic': main_topic}])
 
             # Does the entry for the file already exist? If not, then insert it
             if not path in self.libraryIndex['path'].to_list():
@@ -551,7 +602,7 @@ class Librarian:
             cur_rec = self.libraryIndex[self.libraryIndex['path']
                                         == path].iloc[0]
 
-            if (cur_rec['rec_mod_dtm'] != rec_mod_dtm) or (cur_rec['sentiment'] != sentiment) or (cur_rec['primary_emotion'] != primary_emotion):
+            if (cur_rec['rec_mod_dtm'] != rec_mod_dtm) or (cur_rec['sentiment'] != sentiment) or (cur_rec['primary_emotion'] != primary_emotion) or (cur_rec['main_topic'] != main_topic):
                 # There is a difference, so replace the record
                 lib_key = cur_rec['lib_key']
                 dfn['lib_key'] = lib_key
@@ -576,7 +627,7 @@ class Librarian:
 
             else:
                 df = pd.DataFrame([{'summary': str(None), 'summary_reasoning': str(None),
-                                  'sentiment': bool(None), 'primary_emotion': str(None), 'secondary_emotion': str(None)}])
+                                  'sentiment': bool(None), 'primary_emotion': str(None), 'secondary_emotion': str(None), 'main_topic': str(None)}])
 
             for c in self.classifier.classification_columns:
                 if not c in df.columns:
@@ -621,17 +672,18 @@ class Librarian:
                 clf = self.fetch_classification(
                     source_id=source_id)
 
+                if 'main_topic' not in clf.columns:
+                    clf['main_topic'] = ''
+
                 summary = clf['summary'].iloc[0]
                 summary_reasoning = clf['summary_reasoning'].iloc[0]
                 sentiment = clf['sentiment'].iloc[0]
                 primary_emotion = clf['primary_emotion'].iloc[0]
                 secondary_emotion = clf['secondary_emotion'].iloc[0]
+                main_topic = clf['main_topic'].iloc[0]
 
-                # try:
                 new_items = self.upsert_library_index(source_id, rec_mod_dtm, doc_type_id, source_system_id,
-                                                      path, summary, summary_reasoning, sentiment, primary_emotion, secondary_emotion)
-                # except:
-                #    print(f'Error updating with record {source_id}')
+                                                      path, summary, summary_reasoning, sentiment, primary_emotion, secondary_emotion, main_topic)
 
                 if new_items:
                     any_changes = True
@@ -1064,6 +1116,39 @@ class Watchmen:
                 pq.write_table(table, topics_file_path,
                                use_dictionary=True, compression='gzip')
         print(f'Topics built for {new_file_ct} transcripts.')
+
+    def update_new_classifications(self):
+        '''Checks to see if any classifications are missing. You should update this procedure if you add new classifications'''
+        print('Checking existing classifications')
+        chan_list = self.librarian.channels_list()
+        new_file_ct = 0
+        columns = ['summary', 'summary_reasoning', 'sentiment',
+                   'primary_emotion', 'secondary_emotion', 'main_topic']
+        for chan in chan_list:
+            df = pd.read_parquet(
+                self.librarian.channels_folder() + chan + '_search.parquet')
+            video_ids = df['video_id'].to_list()
+            for video_id in video_ids:
+                classification_file = self.librarian.classifications_folder() + video_id + \
+                    '_classification.parquet'
+                if os.path.exists(classification_file):
+                    dfc = pd.read_parquet(classification_file)
+                    if 'main_topic' not in dfc.columns:
+                        dfc['main_topic'] = ''
+
+                    if dfc['main_topic'][0] == '':
+                        # main topic was added - make sure the file has that
+                        new_file_ct += 1
+                        print(f'rewriting {classification_file}')
+                        self.scholar.text_from_transcript_parquet(
+                            self.librarian.transcripts_folder() + video_id + "_transcript.parquet")
+                        main_topic = self.scholar.analyze_main_topic()
+                        dfc['main_topic'] = main_topic
+                        table = pa.Table.from_pandas(dfc)
+                        pq.write_table(
+                            table, classification_file, use_dictionary=True, compression='gzip')
+
+        print(f'{new_file_ct} main topics added.')
 
     def classify_transcripts(self, category=''):
         '''Uses AI to classify all transcripts. Providing a category is optional'''

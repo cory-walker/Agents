@@ -13,7 +13,6 @@ def main():
     w = Watchmen.Watchmen(
         openai_api_key_path=openai_api_key_path, include_youtube_explorer=False)
     w.build_entities_for_all()
-    w.identify_topics_for_all()
     w.classify_transcripts()
 
 
