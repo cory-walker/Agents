@@ -4,3 +4,4 @@ data/entities/
 data/transcripts/
 Agent testing.ipynb
 data/topics/
+__pycache__/

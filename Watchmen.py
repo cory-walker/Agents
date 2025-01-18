@@ -670,6 +670,9 @@ class Librarian:
 
             return video_ids
 
+        def topic_index_path(self):
+            return self.library_path + 'data/topic_index.parquet'
+
         def compile_entity_index(self):
             dfe = pd.DataFrame()
 
@@ -681,6 +684,18 @@ class Librarian:
 
             table = pa.Table.from_pandas(dfe)
             pq.write_table(table, self.library_path + 'data/entity_index.parquet',
+                           use_dictionary=True, compression='gzip')
+
+        def compile_topic_index(self):
+            dft = pd.DataFrame()
+
+            for file in os.listdir(self.topics_folder()):
+                source_id = file.replace('_topics.parquet', '')
+                df = pd.read_parquet(self.topics_folder() + file)
+                dft = pd.concat([dft, df])
+
+            table = pa.Table.from_pandas(dft)
+            pq.write_table(table, self.topic_index_path(),
                            use_dictionary=True, compression='gzip')
 
         def collect_data_containing_entity(self, entity):
@@ -708,6 +723,62 @@ class Librarian:
 
         def topics_folder(self):
             return self.library_path + 'data/topics/'
+
+        def video_analysis_data_path(self):
+            return self.library_path + 'data/analysis/video_analysis_data.parquet'
+
+        def entity_analysis_data_path(self):
+            return self.library_path + 'data/analysis/entity_analysis_data.parquet'
+
+        def topic_analysis_data_path(self):
+            return self.library_path + 'data/analysis/topic_analysis_data.parquet'
+
+        def compile_analysis_files(self):
+            '''
+            Combines video search, channel metadata, and video metadata into the video_analysis_data.parquet file
+            Combines video search, channel metadata, video metadata, and entity data into the entity_analysis_data.parquet file
+            '''
+            dfChannels = pd.read_csv(
+                self.channels_index_path(), encoding='utf-8')
+            channel_ids = dfChannels['channel_id'].to_list()
+            dfci = pd.DataFrame()
+            for channel_id in channel_ids:
+                file_path = self.channels_folder(
+                ) + f'{channel_id}_search.parquet'
+                if os.path.exists(file_path):
+                    dfs = pd.read_parquet(file_path)
+                    dfci = pd.concat([dfci, dfs])
+
+            dfci = dfci.join(dfChannels.set_index(
+                'channel_id'), on='channel_id')
+            dfci.drop(axis=1, columns=['channel_id', 'code'], inplace=True)
+
+            dfli = pd.read_parquet(self.library_index_path())
+            dfli.drop(axis=1, columns=[
+                      'lib_key', 'doc_type_id', 'source_system_id', 'path', 'summary_reasoning'], inplace=True)
+
+            dfci = dfci.join(dfli.set_index('source_id'),
+                             on='video_id', how='inner')
+
+            table = pa.Table.from_pandas(dfci)
+            pq.write_table(table, self.video_analysis_data_path(),
+                           use_dictionary=True, compression='gzip')
+
+            dfei = pd.read_parquet('./data/entity_index.parquet')
+
+            dfei = dfei.join(dfci.set_index('video_id'),
+                             on='source_id', how='inner')
+            table = pa.Table.from_pandas(dfei)
+            pq.write_table(table, self.entity_analysis_data_path(),
+                           use_dictionary=True, compression='gzip')
+
+            dft = pd.read_parquet(self.topic_index_path())
+            dfti = dft.join(dfci.set_index('video_id'),
+                            on='source_id', how='inner')
+
+            table = pa.Table.from_pandas(dfti)
+            pq.write_table(table, self.topic_analysis_data_path(),
+                           use_dictionary=True, compression='gzip')
 
 
 class YouTubeExplorer:
