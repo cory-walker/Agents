@@ -14,6 +14,8 @@ import math
 
 
 class Keyring:
+    '''Holds your API keys'''
+
     def __init__(self, keys={}):
         self.keys = keys
 
@@ -33,6 +35,7 @@ class Keyring:
 
 
 class Scholar:
+    '''Reads, writes, and analyzes things'''
     class Interaction:
 
         class EmotionSecondary(dspy.Signature):
@@ -361,8 +364,31 @@ class Scholar:
 
         def create_topic_list(self):
             '''Returns the topics of the text in a list'''
-            #! MUST ADD IN BATCH PROCESS FOR TEXT BEYOND 120000 TOKENS
-            return dspy.ChainOfThought(Scholar.Interaction.TopicList)(text=self.text).topics.split(',')
+            token_ct = self.token_count()
+
+            if token_ct < 120000:
+                return dspy.ChainOfThought(Scholar.Interaction.TopicList)(text=self.text).topics.split(',')
+            else:
+                text_orig = self.text
+                token_ct = self.token_count()
+                iterations = math.ceil(token_ct / 120000)
+                doc = self.nlp(text_orig)
+                step = token_ct / iterations
+                all_topics = []
+
+                for i in range(iterations):
+                    token_start = i * step
+                    token_stop = token_start + step
+                    str_list = [i.text for i in doc[token_start:token_stop]]
+
+                    self.text = ' '.join(str_list)
+                    topics = dspy.ChainOfThought(Scholar.Interaction.TopicList)(
+                        text=self.text).topics.split(',')
+                    all_topics.extend(topics)
+
+                self.text = text_orig
+                all_topics = list(set(all_topics))
+                return all_topics
 
         def create_article_outline(self, topic):
             '''returns an article outline as a list for a given topic while using the text as the main information source'''
@@ -430,6 +456,7 @@ class Scholar:
 
 
 class Librarian:
+    '''Organizes your things and can collect things from your library'''
     class Classifer:
         def __init__(self, dimensions_folder):
             self.dim_emotions = pd.read_csv(
@@ -684,7 +711,7 @@ class Librarian:
 
 
 class YouTubeExplorer:
-
+    '''Searches YouTube and fetches transcripts'''
     class SearchQuery:
         def __init__(self, search_for, part, channel_id, max_results, published_after, region_cd, relevance_language, safe_search, order, video_duration):
             self.search_for = search_for
@@ -815,7 +842,8 @@ class YouTubeExplorer:
 
         def channel_video_list(self, channel_id, max_pages=1):
             '''Searches a channel in reverse chronological order, returns the entire history of videos and some metadata in a pandas dataframe'''
-
+            print(
+                f'Searching for: {channel_id} max_pages: {max_pages}', end='... ')
             # Loop through the desired number of page results to load the snippets array
             snip = None
             snippets = []
@@ -848,6 +876,7 @@ class YouTubeExplorer:
             pq.write_table(table, channels_file_path,
                            use_dictionary=True, compression='gzip')
 
+            print('done.')
             return df
 
         def video_search(self, search_for='', channel_id='', max_results=25, published_after='1970-01-01T00:00:00.000Z', region_cd='ca', relevance_language='en', safe_search='none', order='date', video_duration='medium'):
@@ -873,9 +902,11 @@ class YouTubeExplorer:
 
         def fetch_transcript(self, video_id):
             '''Checks to see if a transcript has already been saved, fetching it if not. Returns a dictionary of the transcript'''
+            print(f'fetching transcript for: {video_id}', end='...')
             file_path = self.transcripts_folder() + video_id + '_transcript.parquet'
 
             if os.path.exists(file_path):
+                print('found.')
                 return True
 
             try:
@@ -886,8 +917,10 @@ class YouTubeExplorer:
                     table = pa.Table.from_pandas(df)
                     pq.write_table(table, file_path,
                                    use_dictionary=True, compression='gzip')
+                print('downloaded.')
                 return True
             except:
+                print('unable to download.')
                 return False
 
         def fetch_transcripts_for_channel(self, channel_id):
@@ -903,42 +936,54 @@ class YouTubeExplorer:
 
 
 class Watchmen:
-    def __init__(self, youtube_api_key_path='', openai_api_key_path='', spacy_model='en_core_web_sm', refresh_indexes=True):
+    '''This is a team of the other classes, so you can coordinate their efforts.'''
+
+    def __init__(self, youtube_api_key_path='', openai_api_key_path='', spacy_model='en_core_web_sm', refresh_indexes=True, include_youtube_explorer=True, include_scholar=True):
         self.master_keyring = Keyring()
 
         print('setting up librarian...')
         self.librarian = Librarian.Librarian(refresh_index=refresh_indexes)
 
-        print('setting up youtube explorer...')
-        # setup keys
-        if youtube_api_key_path > '':
-            self.master_keyring.add_key_from_path(
-                system_name='youtube', file_path=youtube_api_key_path)
-            self.yte_explorer = YouTubeExplorer.Explorer(keyring=Keyring(
-                self.master_keyring.copy_key('youtube')))
+        if include_youtube_explorer:
+            print('setting up youtube explorer.')
+            # setup keys
+            if youtube_api_key_path > '':
+                self.master_keyring.add_key_from_path(
+                    system_name='youtube', file_path=youtube_api_key_path)
+                self.yte_explorer = YouTubeExplorer.Explorer(keyring=Keyring(
+                    self.master_keyring.copy_key('youtube')))
 
+            else:
+                self.yte_explorer = YouTubeExplorer.Explorer()
         else:
-            self.yte_explorer = YouTubeExplorer.Explorer()
+            print('Skipping YouTube Explorer setup')
 
-        print('setting up scholar...')
-        if openai_api_key_path > '':
-            self.master_keyring.add_key_from_path(
-                system_name='openai', file_path=openai_api_key_path)
+        if include_scholar:
+            print('setting up scholar...')
+            if openai_api_key_path > '':
+                self.master_keyring.add_key_from_path(
+                    system_name='openai', file_path=openai_api_key_path)
 
-            self.scholar = Scholar.Scholar(keyring=Keyring(
-                self.master_keyring.copy_key('openai')), spacy_model=spacy_model)
+                self.scholar = Scholar.Scholar(keyring=Keyring(
+                    self.master_keyring.copy_key('openai')), spacy_model=spacy_model)
 
+            else:
+                self.scholar = Scholar.Scholar()
         else:
-            self.scholar = Scholar.Scholar()
+            print('Skipping Scholar setup.')
 
     def identify_topics_for_all(self):
         '''Generates topic files for all transcripts that don't have one'''
+        print('Identifing topics for all transcripts.')
+        new_file_ct = 0
         for file in os.listdir(self.librarian.transcripts_folder()):
             source_id = file.replace('_transcript.parquet', '')
             topics_file_path = self.librarian.topics_folder() + source_id + \
                 '_topics.parquet'
 
             if not os.path.exists(topics_file_path):
+                print(f'Building topics for {source_id}')
+                new_file_ct += 1
                 self.scholar.text_from_transcript_parquet(
                     self.librarian.transcripts_folder() + file)
                 topics_list = self.scholar.create_topic_list()
@@ -947,9 +992,13 @@ class Watchmen:
                 table = pa.Table.from_pandas(df)
                 pq.write_table(table, topics_file_path,
                                use_dictionary=True, compression='gzip')
+        print(f'Topics built for {new_file_ct} transcripts.')
 
     def classify_transcripts(self, category=''):
+        '''Uses AI to classify all transcripts. Providing a category is optional'''
+        print('Classifying transcripts.')
         chan_list = self.librarian.channels_list(category=category)
+        new_file_ct = 0
         for chan in chan_list:
             df = pd.read_parquet(
                 self.librarian.channels_folder() + chan + '_search.parquet')
@@ -958,9 +1007,12 @@ class Watchmen:
                 classification_file = self.librarian.classifications_folder() + video_id + \
                     '_classification.parquet'
                 if not os.path.exists(classification_file):
+                    print(f'Classifying {video_id}')
+                    new_file_ct += 1
                     self.scholar.text_from_transcript_parquet(
                         self.librarian.transcripts_folder() + video_id + "_transcript.parquet")
                     self.scholar.create_overall_classification()
+        print(f'{new_file_ct} transcripts classified.')
 
     def entity_file_path(self, video_id):
         return './data/entities/' + video_id + '_entities.parquet'
@@ -978,15 +1030,21 @@ class Watchmen:
 
     def build_entities_for_all(self):
         '''Builds entity files for all transcripts. Skips building if an entity file already exists for a particular video'''
+        print('Building entities for all transcripts...')
+        new_files_ct = 0
         for transcript_file in os.listdir('./data/transcripts'):
             video_id = transcript_file.replace('_transcript.parquet', '')
             if not os.path.exists(self.entity_file_path(video_id)):
+                new_files_ct += 1
                 self.build_entities_file(video_id)
+        print(f'Entities built for {new_files_ct} transcripts.')
 
     def fetch_new_transcripts_for_channels(self, category='', max_pages=1):
         '''Fetches any new transcripts for channels matching the category provided. Blank seeks all categories.'''
         chan_list = self.librarian.channels_list(category=category)
+        print(f'{len(chan_list)} channels found.')
         for chan in chan_list:
+            print(f'Updating: {chan}')
             self.yte_explorer.channel_video_list(
                 channel_id=chan, max_pages=max_pages)
             self.yte_explorer.fetch_transcripts_for_channel(channel_id=chan)
