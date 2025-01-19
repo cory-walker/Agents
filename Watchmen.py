@@ -3,7 +3,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import os
-from datetime import datetime
+import datetime
 from youtube_transcript_api import YouTubeTranscriptApi
 import googleapiclient.discovery
 import dspy
@@ -666,7 +666,7 @@ class Librarian:
                 path = folder + file
                 source_id = file.replace(source_id_replacement, '')
 
-                rec_mod_dtm = datetime.fromtimestamp(
+                rec_mod_dtm = datetime.datetime.fromtimestamp(
                     os.path.getctime(path)).strftime('%Y-%m-%d %H:%M:%S')
 
                 clf = self.fetch_classification(
@@ -785,6 +785,9 @@ class Librarian:
         def topic_analysis_data_path(self):
             return self.library_path + 'data/analysis/topic_analysis_data.parquet'
 
+        def convert_to_date(self, dtm):
+            return dtm.date()
+
         def compile_analysis_files(self):
             '''
             Combines video search, channel metadata, and video metadata into the video_analysis_data.parquet file
@@ -811,6 +814,14 @@ class Librarian:
 
             dfci = dfci.join(dfli.set_index('source_id'),
                              on='video_id', how='inner')
+
+            dfci['published_at'] = pd.to_datetime(
+                dfci['published_at'], utc=True)
+            dfci['publish_dt_et'] = pd.to_datetime(
+                dfci['published_at'], utc=True).dt.tz_convert('US/Eastern')
+
+            dfci['publish_dt_et'] = dfci['publish_dt_et'].apply(
+                lambda x: self.convert_to_date(x))
 
             table = pa.Table.from_pandas(dfci)
             pq.write_table(table, self.video_analysis_data_path(),
