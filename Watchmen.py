@@ -108,6 +108,29 @@ class Scholar:
                     ulist.append(d)
             return ulist
 
+        def cleaned_list(self):
+            '''Returns a dataframe of the entities but attempts to refine them by removing shortforms of already listed entities, such as a person's first name when compared to their full name.'''
+            df = self.to_dataframe()
+            df['len'] = df['value'].str.len()
+            dfCleaned = pd.DataFrame(columns=['entity_type', 'value'])
+            for et in self.entity_types.keys():
+                cList = []
+                eList = df[df['entity_type'] == et].sort_values(
+                    'len', ascending=False)['value'].to_list()
+                for e in eList:
+                    has_match = False
+                    for c in cList:
+                        if e in c:
+                            has_match = True
+                            break
+
+                    if not has_match:
+                        cList.append(e)
+                        dfCleaned = pd.concat(
+                            [dfCleaned, pd.DataFrame([{'entity_type': et, 'value': e}])])
+
+            return dfCleaned
+
         def to_dataframe(self):
             '''Returns a dataframe containing the unique entity key value pairs'''
             list = self.unique_entities()
@@ -170,12 +193,11 @@ class Scholar:
 
             return spacy.displacy.render(doc, style='ent')
 
-        def extract_entities(self):
-            '''Extracts named entities from the text using spacy'''
+        def extract_entities(self, text):
             if self.nlp is None:
                 self.configure_spacy_nlp_model()
 
-            doc = self.nlp(self.text)
+            doc = self.nlp(text)
             entities = []
             for ent in doc.ents:
                 entities.append({ent.label_: ent.text})
@@ -537,12 +559,18 @@ class Librarian:
             if not os.path.exists(self.library_index_path()):
                 self.create_document_store()
 
+            if not os.path.exists(self.entity_index_path()):
+                self.compile_entity_index()
+
             self.channelIndex = pd.read_csv(
                 self.channels_index_path(), encoding='utf8')
 
             self.classifier = Librarian.Classifer(self.dimensions_folder())
             self.libraryIndex = pd.read_parquet(self.library_index_path())
             self.libraryIndex.set_index('lib_key')
+
+            if not os.path.exists(self.transcript_skip_file_path()):
+                self.create_video_skip_file()
 
             if refresh_index:
                 self.refresh_index()
@@ -553,6 +581,12 @@ class Librarian:
                 dfc = dfc[dfc['category'].str.lower() == category.lower()]
 
             return dfc['channel_id'].to_list()
+
+        def create_video_skip_file(self):
+            df = pd.DataFrame({'video_id': []})
+            table = pa.Table.from_pandas(df)
+            pq.write_table(table, self.transcript_skip_file_path(),
+                           use_dictionary=True, compression='gzip')
 
         def create_document_store(self):
             df = pd.DataFrame(columns=[
@@ -568,8 +602,14 @@ class Librarian:
         def library_index_path(self):
             return self.library_path + 'data/library_index.parquet'
 
+        def transcript_skip_file_path(self):
+            return self.library_path + 'data/transcript_skip.parquet'
+
         def channels_index_path(self):
             return self.library_path + 'data/youtube_channels_index.csv'
+
+        def entity_index_path(self):
+            return self.library_path + 'data/entity_index.parquet'
 
         def channels_folder(self):
             return self.library_path + 'data/channels/'
@@ -735,7 +775,7 @@ class Librarian:
                 dfe = pd.concat([dfe, df])
 
             table = pa.Table.from_pandas(dfe)
-            pq.write_table(table, self.library_path + 'data/entity_index.parquet',
+            pq.write_table(table, self.entity_index_path(),
                            use_dictionary=True, compression='gzip')
 
         def compile_topic_index(self):
@@ -928,6 +968,9 @@ class YouTubeExplorer:
             self.api_service_name = api_service_name
             self.api_version = api_version
             self.searches = []
+            self.transcript_skip = []
+
+            self.load_transcrtipt_skip_list()
 
             try:
                 self.configure_youtube_client()
@@ -939,6 +982,13 @@ class YouTubeExplorer:
 
             if not os.path.exists(self.channels_folder()):
                 os.makedirs(self.channels_folder())
+
+        def load_transcrtipt_skip_list(self):
+            self.transcript_skip = []
+            if os.path.exists(self.data_folder + 'transcript_skip.parquet'):
+                df = pd.read_parquet(self.data_folder +
+                                     'transcript_skip.parquet')
+                self.transcript_skip = list(set(df['video_id'].to_list()))
 
         def channels_folder(self):
             return self.data_folder + 'channels/'
@@ -1037,6 +1087,11 @@ class YouTubeExplorer:
         def fetch_transcript(self, video_id):
             '''Checks to see if a transcript has already been saved, fetching it if not. Returns a dictionary of the transcript'''
             print(f'fetching transcript for: {video_id}', end='...')
+
+            if video_id in self.transcript_skip:
+                print('in skip list. cancelled')
+                return False
+
             file_path = self.transcripts_folder() + video_id + '_transcript.parquet'
 
             if os.path.exists(file_path):
@@ -1054,8 +1109,16 @@ class YouTubeExplorer:
                 print('downloaded.')
                 return True
             except:
+                self.transcript_skip.append(video_id)
+                self.save_transcript_skip_list()
                 print('unable to download.')
                 return False
+
+        def save_transcript_skip_list(self):
+            df = pd.DataFrame({'video_id': self.transcript_skip})
+            table = pa.Table.from_pandas(df)
+            pq.write_table(table, self.data_folder + 'transcript_skip.parquet',
+                           use_dictionary=True, compression='gzip')
 
         def fetch_transcripts_for_channel(self, channel_id):
             '''Uses the channel search history file and fetches any missing transcripts'''
@@ -1183,16 +1246,27 @@ class Watchmen:
     def entity_file_path(self, video_id):
         return './data/entities/' + video_id + '_entities.parquet'
 
-    def build_entities_file(self, video_id):
+    def build_entities_file(self, video_id, use_summary=True, recompile_entities_index=True):
         '''Reads in a transcript and builds a parquet file containing the unique entity list'''
         print(f'building entity file for {video_id}')
-        transcript_path = './data/transcripts/' + video_id + '_transcript.parquet'
-        self.scholar.text_from_transcript_parquet(transcript_path)
-        self.scholar.extract_entities()
-        df = self.scholar.entity_list.to_dataframe()
+
+        self.scholar.video_id = video_id
+
+        if use_summary:
+            classification = self.scholar.create_overall_classification()
+            text = classification['summary']
+        else:
+            transcript_path = './data/transcripts/' + video_id + '_transcript.parquet'
+            self.scholar.text_from_transcript_parquet(transcript_path)
+            text = self.scholar.text
+
+        self.scholar.extract_entities(text)
+        df = self.scholar.entity_list.cleaned_list()
         table = pa.Table.from_pandas(df)
         pq.write_table(table, self.entity_file_path(video_id), use_dictionary=True,
                        compression='gzip')
+        if recompile_entities_index:
+            self.librarian.compile_entity_index()
 
     def build_entities_for_all(self):
         '''Builds entity files for all transcripts. Skips building if an entity file already exists for a particular video'''
@@ -1202,7 +1276,9 @@ class Watchmen:
             video_id = transcript_file.replace('_transcript.parquet', '')
             if not os.path.exists(self.entity_file_path(video_id)):
                 new_files_ct += 1
-                self.build_entities_file(video_id)
+                self.build_entities_file(
+                    video_id, recompile_entities_index=False)
+        self.librarian.compile_entity_index()
         print(f'Entities built for {new_files_ct} transcripts.')
 
     def fetch_new_transcripts_for_channels(self, category='', max_pages=1):
