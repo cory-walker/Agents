@@ -111,7 +111,7 @@ class Scholar:
         def cleaned_list(self):
             '''Returns a dataframe of the entities but attempts to refine them by removing shortforms of already listed entities, such as a person's first name when compared to their full name.'''
             df = self.to_dataframe()
-            df['len'] = df['value'].str.len()
+            df['len'] = df['value'].astype(str).str.len()
             dfCleaned = pd.DataFrame(columns=['entity_type', 'value'])
             for et in self.entity_types.keys():
                 cList = []
